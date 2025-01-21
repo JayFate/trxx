@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "A tool to pack and unpack text files"
 authors = ["JayFate <37610029@qq.com>"]
+license = "MIT"
 
 [[bin]]
 name = "trxx"
