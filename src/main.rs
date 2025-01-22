@@ -161,7 +161,15 @@ fn pack_files(dir_path: &str) -> Result<()> {
                                     if let Some(lang) = extension_map.get(&ext) {
                                         all_content.push_str(&format!("```{}", lang));
                                         all_content.push_str("\n\n");
+                                    } else {
+                                        // 如果找不到对应的语言标识符，使用普通代码块
+                                        all_content.push_str("```");
+                                        all_content.push_str("\n\n");
                                     }
+                                } else {
+                                    // 如果没有扩展名，使用普通代码块
+                                    all_content.push_str("```");
+                                    all_content.push_str("\n\n");
                                 }
                                 
                                 all_content.push_str(&content);
