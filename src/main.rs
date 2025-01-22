@@ -98,6 +98,25 @@ fn load_extension_map() -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
+fn escape_markdown_content(content: &str, is_markdown: bool) -> String {
+    if !is_markdown {
+        return content.to_string();
+    }
+
+    content.lines()
+        .map(|line| {
+            if line.starts_with("```") {
+                format!("\\{}", line)
+            } else if line.starts_with('#') {
+                format!("\\{}", line)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
 fn pack_files(dir_path: &str) -> Result<()> {
     let extension_map = load_extension_map()?;
     let path = Path::new(dir_path);
@@ -142,6 +161,14 @@ fn pack_files(dir_path: &str) -> Result<()> {
                 if let Ok(rel_path) = path.strip_prefix(&abs_path) {
                     let rel_path = rel_path.to_string_lossy().to_string();
                     
+                    // 检查是否是 markdown 文件
+                    let is_markdown = Path::new(&rel_path)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_lowercase())
+                        .map(|ext| ext == "md")
+                        .unwrap_or(false);
+                    
                     // 尝试读取文件内容，如果出错则跳过该文件
                     match fs::read(path) {
                         Ok(bytes) => {
@@ -162,17 +189,17 @@ fn pack_files(dir_path: &str) -> Result<()> {
                                         all_content.push_str(&format!("```{}", lang));
                                         all_content.push_str("\n\n");
                                     } else {
-                                        // 如果找不到对应的语言标识符，使用普通代码块
                                         all_content.push_str("```");
                                         all_content.push_str("\n\n");
                                     }
                                 } else {
-                                    // 如果没有扩展名，使用普通代码块
                                     all_content.push_str("```");
                                     all_content.push_str("\n\n");
                                 }
                                 
-                                all_content.push_str(&content);
+                                // 处理内容，如果是 markdown 文件则转义特殊字符
+                                let processed_content = escape_markdown_content(&content, is_markdown);
+                                all_content.push_str(&processed_content);
                                 all_content.push_str("\n\n");
                                 all_content.push_str("```");
                                 all_content.push_str("\n\n");
@@ -199,6 +226,20 @@ fn pack_files(dir_path: &str) -> Result<()> {
     Ok(())
 }
 
+fn unescape_markdown_content(line: &str, is_markdown: bool) -> String {
+    if !is_markdown {
+        return line.to_string();
+    }
+
+    if line.starts_with("\\```") {
+        line.trim_start_matches('\\').to_string()
+    } else if line.starts_with("\\#") {
+        line.trim_start_matches('\\').to_string()
+    } else {
+        line.to_string()
+    }
+}
+
 fn revert_files(input_path: &str) -> Result<()> {
     let content = fs::read_to_string(input_path)
         .with_context(|| format!("无法读取文件 {}", input_path))?;
@@ -206,12 +247,16 @@ fn revert_files(input_path: &str) -> Result<()> {
     let mut current_file = String::new();
     let mut current_content = String::new();
     let mut is_header = true;
+    let mut in_code_block = false;
+    let mut is_markdown = false;
 
     for line in content.lines() {
         if line.starts_with("###  trxx:") {
             // 保存前一个文件
             if !current_file.is_empty() && !current_content.is_empty() {
-                save_file(&current_file, &current_content)?;
+                // 去除开头和结尾的空行
+                let trimmed_content = current_content.trim_matches('\n');
+                save_file(&current_file, trimmed_content)?;
             }
 
             // 提取新文件名
@@ -219,11 +264,26 @@ fn revert_files(input_path: &str) -> Result<()> {
                 .trim_start_matches("###  trxx:")
                 .trim()
                 .to_string();
+                
+            // 检查是否是 markdown 文件
+            is_markdown = current_file.ends_with(".md");
             current_content = String::new();
             is_header = true;
+            in_code_block = false;
         } else if !is_header {
-            current_content.push_str(line);
-            current_content.push('\n');
+            // 跳过代码块标记
+            if line.starts_with("```") {
+                in_code_block = !in_code_block;
+                continue;
+            }
+            
+            // 只有在代码块内的内容才添加到 current_content
+            if in_code_block {
+                // 处理转义字符
+                let unescaped_line = unescape_markdown_content(line, is_markdown);
+                current_content.push_str(&unescaped_line);
+                current_content.push('\n');
+            }
         } else if line.is_empty() {
             is_header = false;
         }
@@ -231,7 +291,9 @@ fn revert_files(input_path: &str) -> Result<()> {
 
     // 保存最后一个文件
     if !current_file.is_empty() && !current_content.is_empty() {
-        save_file(&current_file, &current_content)?;
+        // 去除开头和结尾的空行
+        let trimmed_content = current_content.trim_matches('\n');
+        save_file(&current_file, trimmed_content)?;
     }
 
     println!("文件已还原完成");
