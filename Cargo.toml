@@ -1,6 +1,6 @@
 [package]
 name = "trxx"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "A tool to pack and unpack text files"
 authors = ["JayFate <37610029@qq.com>"]
