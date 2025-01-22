@@ -14,7 +14,11 @@
 
 ```bash
 # 通过 cargo 安装
-cargo install --path .
+cargo install trxx
+# 重新加载终端配置（Linux/macOS）
+source ~/.bashrc  # 或 source ~/.zshrc
+# 验证命令是否可用
+trxx --version
 ```
 
 ## 使用方法
@@ -36,9 +40,9 @@ trxx /path/to/directory
 
 ```bash
 # 还原文件
-trxx revert all_content.txt
+trxx revert all_content.md
 # 还原其他名称的打包文件
-trxx revert output.txt
+trxx revert output.md
 ```
 
 ## 支持的文本文件类型
@@ -56,7 +60,7 @@ trxx revert output.txt
   -  /node_modules/
 
 - 文件：
-  - all_content.txt
+  - all_content.md
   - *.lock
 
 - 大于 1MB 的文件

@@ -4,6 +4,8 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+use std::collections::HashMap;
+use serde_json;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -37,36 +39,155 @@ fn main() -> Result<()> {
     }
 }
 
+fn should_ignore_dir(path: &Path) -> bool {
+    // 检查路径的每一部分
+    for ancestor in path.ancestors() {
+        if let Some(name) = ancestor.file_name() {
+            if let Some(name_str) = name.to_str() {
+                if name_str == ".git" || name_str == "target" || name_str == "node_modules" {
+                    eprintln!("忽略目录: {}", ancestor.display());
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn should_ignore_file(name: &str) -> bool {
+    name == "all_content.md" || name.ends_with(".lock")
+}
+
+fn load_extension_map() -> Result<HashMap<String, String>> {
+    let map_content = r#"{
+        "rs": "rust",
+        "json": "json",
+        "js": "javascript",
+        "ts": "typescript",
+        "py": "python",
+        "java": "java",
+        "cpp": "cpp",
+        "c": "c",
+        "go": "go",
+        "rb": "ruby",
+        "php": "php",
+        "html": "html",
+        "css": "css",
+        "md": "markdown",
+        "yaml": "yaml",
+        "yml": "yaml",
+        "toml": "toml",
+        "sh": "bash",
+        "bash": "bash",
+        "sql": "sql",
+        "vue": "vue",
+        "jsx": "jsx",
+        "tsx": "tsx",
+        "lua": "lua",
+        ".h": "c/c++ header",
+        ".conf": "conf",
+        ".ini": "ini",
+        ".txt": "text",
+        ".bat": "batch file",
+        ".ps1": "powershell",
+        ".env": "env",
+        ".gitignore": "gitignore"
+    }"#;
+    
+    let map: HashMap<String, String> = serde_json::from_str(map_content)?;
+    Ok(map)
+}
+
 fn pack_files(dir_path: &str) -> Result<()> {
-    let abs_path = fs::canonicalize(dir_path)?;
+    let extension_map = load_extension_map()?;
+    let path = Path::new(dir_path);
+    if should_ignore_dir(path) {
+        println!("指定的目录被忽略");
+        return Ok(());
+    }
+
+    let abs_path = fs::canonicalize(path)?;
     let mut all_content = String::new();
     let mut file_list = Vec::new();
 
     // 收集所有文本文件
-    for entry in WalkDir::new(&abs_path)
-        .follow_links(true)
+    let walker = WalkDir::new(&abs_path)
+        .follow_links(false)
         .into_iter()
-        .filter_entry(|e| !should_ignore_path(e.path())) {
+        .filter_entry(|e| {
+            let path = e.path();
             
+            // 先检查是否是需要忽略的目录
+            if should_ignore_dir(path) {
+                return false;
+            }
+            
+            // 再检查是否是需要忽略的文件
+            if e.file_type().is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if should_ignore_file(name) {
+                        return false;
+                    }
+                }
+            }
+            
+            true
+        });
+
+    for entry in walker {
         let entry = entry?;
         if entry.file_type().is_file() {
             let path = entry.path();
             if is_text_file(path) {
-                let rel_path = path.strip_prefix(&abs_path)?.to_string_lossy().to_string();
-                file_list.push(path.to_path_buf());
-                
-                let mut content = String::new();
-                File::open(path)?.read_to_string(&mut content)?;
-                
-                all_content.push_str(&format!("==========  {}  ==========\n\n", rel_path));
-                all_content.push_str(&content);
-                all_content.push_str("\n\n");
+                if let Ok(rel_path) = path.strip_prefix(&abs_path) {
+                    let rel_path = rel_path.to_string_lossy().to_string();
+                    
+                    // 尝试读取文件内容，如果出错则跳过该文件
+                    match fs::read(path) {
+                        Ok(bytes) => {
+                            // 检查文件内容是否为有效的 UTF-8
+                            if let Ok(content) = String::from_utf8(bytes) {
+                                file_list.push(path.to_path_buf());
+                                
+                                all_content.push_str(&format!("###  trxx:{}\n\n", rel_path));
+                                all_content.push_str("\n\n");
+                                
+                                // 获取文件扩展名并查找对应的语言标识符
+                                if let Some(ext) = Path::new(&rel_path)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(|e| e.to_lowercase()) {
+                                    
+                                    if let Some(lang) = extension_map.get(&ext) {
+                                        all_content.push_str(&format!("```{}", lang));
+                                        all_content.push_str("\n\n");
+                                    }
+                                }
+                                
+                                all_content.push_str(&content);
+                                all_content.push_str("\n\n");
+                                all_content.push_str("```");
+                                all_content.push_str("\n\n");
+                            } else {
+                                eprintln!("警告: 文件 {} 不是有效的 UTF-8 编码，已跳过", rel_path);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("警告: 读取文件 {} 失败: {}", rel_path, e);
+                        }
+                    }
+                }
             }
         }
     }
 
-    fs::write("all_content.txt", all_content)?;
-    println!("文件已打包到 all_content.txt");
+    if all_content.is_empty() {
+        println!("没有找到任何有效的文本文件");
+        return Ok(());
+    }
+
+    fs::write("all_content.md", all_content)?;
+    println!("文件已打包到 all_content.md");
     Ok(())
 }
 
@@ -79,7 +200,7 @@ fn revert_files(input_path: &str) -> Result<()> {
     let mut is_header = true;
 
     for line in content.lines() {
-        if line.starts_with("==========") && line.ends_with("==========") {
+        if line.starts_with("###  trxx:") {
             // 保存前一个文件
             if !current_file.is_empty() && !current_content.is_empty() {
                 save_file(&current_file, &current_content)?;
@@ -87,7 +208,7 @@ fn revert_files(input_path: &str) -> Result<()> {
 
             // 提取新文件名
             current_file = line
-                .trim_matches('=')
+                .trim_start_matches("###  trxx:")
                 .trim()
                 .to_string();
             current_content = String::new();
@@ -118,27 +239,6 @@ fn save_file(file_path: &str, content: &str) -> Result<()> {
     Ok(())
 }
 
-fn should_ignore_path(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
-    
-    // 忽略特定目录
-    if path_str.contains("/target/") || 
-       path_str.contains("/node_modules/") {
-        return true;
-    }
-
-    // 获取文件名
-    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-        // 忽略特定文件
-        if file_name == "all_content.txt" || 
-           file_name.ends_with(".lock") {
-            return true;
-        }
-    }
-
-    false
-}
-
 fn is_text_file(path: &Path) -> bool {
     // 如果文件大于 1MB，认为不是文本文件
     if let Ok(metadata) = path.metadata() {
@@ -167,11 +267,11 @@ fn is_text_file(path: &Path) -> bool {
 }
 
 fn is_probably_text(path: &Path) -> bool {
-    if let Ok(mut file) = File::open(path) {
-        let mut buffer = [0; 512];
-        if let Ok(read_count) = file.read(&mut buffer) {
-            // 检查前512字节是否包含空字节（二进制文件通常包含空字节）
-            for &byte in &buffer[..read_count] {
+    if let Ok(bytes) = fs::read(path) {
+        // 检查文件是否为有效的 UTF-8
+        if String::from_utf8(bytes.clone()).is_ok() {
+            // 检查前512字节是否包含空字节
+            for &byte in bytes.iter().take(512) {
                 if byte == 0 {
                     return false;
                 }

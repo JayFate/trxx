@@ -1,4 +1,4 @@
 node_modules
 target
 *.lock
-all_content.txt
+all_content.*
