@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 use std::collections::HashMap;
+use glob::glob;
 use serde_json;
 
 #[derive(Parser)]
@@ -39,23 +39,25 @@ fn main() -> Result<()> {
     }
 }
 
-fn should_ignore_dir(path: &Path) -> bool {
-    // 检查路径的每一部分
-    for ancestor in path.ancestors() {
-        if let Some(name) = ancestor.file_name() {
-            if let Some(name_str) = name.to_str() {
-                if name_str == ".git" || name_str == "target" || name_str == "node_modules" {
-                    eprintln!("忽略目录: {}", ancestor.display());
-                    return true;
-                }
-            }
+fn should_ignore_path(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    
+    // 检查是否包含需要忽略的目录
+    if path_str.contains("/.git/") || 
+       path_str.contains("/target/") || 
+       path_str.contains("/node_modules/") {
+        eprintln!("忽略路径: {}", path.display());
+        return true;
+    }
+
+    // 检查是否是需要忽略的文件
+    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+        if file_name == "all_content.md" || file_name.ends_with(".lock") {
+            return true;
         }
     }
-    false
-}
 
-fn should_ignore_file(name: &str) -> bool {
-    name == "all_content.md" || name.ends_with(".lock")
+    false
 }
 
 fn load_extension_map() -> Result<HashMap<String, String>> {
@@ -117,113 +119,86 @@ fn escape_markdown_content(content: &str, is_markdown: bool) -> String {
         .join("\n")
 }
 
-fn pack_files(dir_path: &str) -> Result<()> {
-    let extension_map = load_extension_map()?;
-    let path = Path::new(dir_path);
-    if should_ignore_dir(path) {
-        println!("指定的目录被忽略");
-        return Ok(());
-    }
-
-    let abs_path = fs::canonicalize(path)?;
-    let mut all_content = String::new();
-    let mut file_list = Vec::new();
-
-    // 收集所有文本文件
-    let walker = WalkDir::new(&abs_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let path = e.path();
-            
-            // 先检查是否是需要忽略的目录
-            if should_ignore_dir(path) {
-                return false;
-            }
-            
-            // 再检查是否是需要忽略的文件
-            if e.file_type().is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if should_ignore_file(name) {
-                        return false;
-                    }
-                }
-            }
-            
-            true
-        });
-
-    for entry in walker {
-        let entry = entry?;
-        if entry.file_type().is_file() {
-            let path = entry.path();
-            if is_text_file(path) {
-                if let Ok(rel_path) = path.strip_prefix(&abs_path) {
-                    let rel_path = rel_path.to_string_lossy().to_string();
-                    
-                    // 检查是否是 markdown 文件
-                    let is_markdown = Path::new(&rel_path)
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.to_lowercase())
-                        .map(|ext| ext == "md")
-                        .unwrap_or(false);
-                    
-                    // 尝试读取文件内容，如果出错则跳过该文件
-                    match fs::read(path) {
-                        Ok(bytes) => {
-                            // 检查文件内容是否为有效的 UTF-8
-                            if let Ok(content) = String::from_utf8(bytes) {
-                                file_list.push(path.to_path_buf());
-                                
-                                all_content.push_str(&format!("###  trxx:{}\n\n", rel_path));
-                                all_content.push_str("\n\n");
-                                
-                                // 获取文件扩展名并查找对应的语言标识符
-                                if let Some(ext) = Path::new(&rel_path)
-                                    .extension()
-                                    .and_then(|e| e.to_str())
-                                    .map(|e| e.to_lowercase()) {
-                                    
-                                    if let Some(lang) = extension_map.get(&ext) {
-                                        all_content.push_str(&format!("```{}", lang));
-                                        all_content.push_str("\n\n");
-                                    } else {
-                                        all_content.push_str("```");
-                                        all_content.push_str("\n\n");
-                                    }
-                                } else {
-                                    all_content.push_str("```");
-                                    all_content.push_str("\n\n");
-                                }
-                                
-                                // 处理内容，如果是 markdown 文件则转义特殊字符
-                                let processed_content = escape_markdown_content(&content, is_markdown);
-                                all_content.push_str(&processed_content);
-                                all_content.push_str("\n\n");
-                                all_content.push_str("```");
-                                all_content.push_str("\n\n");
-                            } else {
-                                eprintln!("警告: 文件 {} 不是有效的 UTF-8 编码，已跳过", rel_path);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("警告: 读取文件 {} 失败: {}", rel_path, e);
-                        }
-                    }
-                }
+fn collect_files(dir_path: &Path) -> Result<Vec<PathBuf>> {
+    let pattern = format!("{}/**/*", dir_path.display());
+    let mut files = Vec::new();
+    
+    for entry in glob(&pattern)? {
+        if let Ok(path) = entry {
+            if path.is_file() && !should_ignore_path(&path) && is_text_file(&path) {
+                files.push(path);
             }
         }
     }
+    
+    Ok(files)
+}
 
-    if all_content.is_empty() {
+fn pack_files(dir_path: &str) -> Result<()> {
+    let extension_map = load_extension_map()?;
+    let abs_path = fs::canonicalize(dir_path)?;
+    let mut all_content = String::new();
+    
+    // 先收集所有符合条件的文件
+    let files = collect_files(&abs_path)?;
+    
+    if files.is_empty() {
         println!("没有找到任何有效的文本文件");
         return Ok(());
+    }
+
+    // 处理每个文件
+    for path in files {
+        let rel_path = path.strip_prefix(&abs_path)?.to_string_lossy().to_string();
+        
+        // 检查是否是 markdown 文件
+        let is_markdown = path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .map(|ext| ext == "md")
+            .unwrap_or(false);
+        
+        // 读取并处理文件内容
+        let content = process_file(&path, &rel_path, &extension_map, is_markdown)?;
+        all_content.push_str(&content);
     }
 
     fs::write("all_content.md", all_content)?;
     println!("文件已打包到 all_content.md");
     Ok(())
+}
+
+fn process_file(path: &Path, rel_path: &str, extension_map: &HashMap<String, String>, is_markdown: bool) -> Result<String> {
+    let bytes = fs::read(path)?;
+    let content = String::from_utf8(bytes)
+        .with_context(|| format!("文件 {} 不是有效的 UTF-8 编码", rel_path))?;
+    
+    let mut result = String::new();
+    
+    // 添加文件头
+    result.push_str(&format!("###  trxx:{}\n\n", rel_path));
+    result.push_str("\n\n");
+    
+    // 添加语言标识符
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()) {
+        if let Some(lang) = extension_map.get(&ext) {
+            result.push_str(&format!("```{}", lang));
+        } else {
+            result.push_str("```");
+        }
+    } else {
+        result.push_str("```");
+    }
+    result.push_str("\n\n");
+    
+    // 处理内容
+    let processed_content = escape_markdown_content(&content, is_markdown);
+    result.push_str(&processed_content);
+    result.push_str("\n\n");
+    result.push_str("```");
+    result.push_str("\n\n");
+    
+    Ok(result)
 }
 
 fn unescape_markdown_content(line: &str, is_markdown: bool) -> String {
