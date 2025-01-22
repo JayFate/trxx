@@ -25,7 +25,7 @@ trxx --version
 
 ### 打包文件
 
-将指定目录下的所有文本文件打包到 all_content.txt：
+将指定目录下的所有文本文件打包到 all_content.md：
 
 ```bash
 # 打包当前目录
