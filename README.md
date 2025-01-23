@@ -51,6 +51,8 @@ trxx revert output.md
 ### 文本文件
 - 常见编程语言文件：.rs, .js, .ts, .py, .java, .cpp, .c, .h, .go 等
 - Web 相关文件：.html, .css, .jsx, .tsx, .vue
+- 小程序文件：.wxss, .wxml
+- 快应用文件：.ux
 - 配置文件：.json, .yaml, .yml, .toml, .conf, .ini
 - 文档文件：.txt, .md
 - 其他常见文本文件：.sh, .bat, .ps1, .env, .gitignore 等

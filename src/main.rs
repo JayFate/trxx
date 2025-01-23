@@ -208,7 +208,10 @@ fn load_extension_map() -> Result<HashMap<String, String>> {
         ".bat": "batch file",
         ".ps1": "powershell",
         ".env": "env",
-        ".gitignore": "gitignore"
+        ".gitignore": "gitignore",
+        "wxss": "css",
+        "wxml": "xml",
+        "ux": "html"
     }"#;
     
     let map: HashMap<String, String> = serde_json::from_str(map_content)?;
@@ -459,7 +462,8 @@ fn should_process_file(path: &Path) -> bool {
         | "h" | "hpp" | "cs" | "go" | "rb" | "php" | "sql" | "vue"
         | "jsx" | "tsx" | "gitignore" | "env" | "rc" | "editorconfig"
         | "gradle" | "properties" | "bat" | "cmd" | "ps1" | "dockerfile"
-        | "lock" | "config" | "template" | "vim" | "lua" | "svg")
+        | "lock" | "config" | "template" | "vim" | "lua" | "svg"
+        | "wxss" | "wxml" | "ux")  // 添加小程序和快应用文件类型
 }
 
 fn is_binary_file(path: &Path) -> bool {
