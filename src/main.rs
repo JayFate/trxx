@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use glob::glob;
 use serde_json;
+use base64;
 
 // 我来解释一下 #[command(subcommand)] 这个属性标注的含义：
 
@@ -143,6 +144,7 @@ fn main() -> Result<()> {
     //     ChangeColor { r: u8, g: u8, b: u8 },  // 每个字段都有名字
     // }
     // ```
+
     match cli.command {
         Some(Commands::Revert { input }) => revert_files(&input),
         None => {
@@ -238,7 +240,7 @@ fn collect_files(dir_path: &Path) -> Result<Vec<PathBuf>> {
     
     for entry in glob(&pattern)? {
         if let Ok(path) = entry {
-            if path.is_file() && !should_ignore_path(&path) && is_text_file(&path) {
+            if path.is_file() && !should_ignore_path(&path) && should_process_file(&path) {
                 files.push(path);
             }
         }
@@ -282,34 +284,44 @@ fn pack_files(dir_path: &str) -> Result<()> {
 }
 
 fn process_file(path: &Path, rel_path: &str, extension_map: &HashMap<String, String>, is_markdown: bool) -> Result<String> {
-    let bytes = fs::read(path)?;
-    let content = String::from_utf8(bytes)
-        .with_context(|| format!("文件 {} 不是有效的 UTF-8 编码", rel_path))?;
-    
     let mut result = String::new();
     
     // 添加文件头
     result.push_str(&format!("###  trxx:{}\n\n", rel_path));
-    result.push_str("\n\n");
     
-    // 添加语言标识符
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()) {
-        if let Some(lang) = extension_map.get(&ext) {
-            result.push_str(&format!("```{}", lang));
+    if is_binary_file(path) {
+        // 处理二进制文件（图片）
+        let bytes = fs::read(path)?;
+        let base64 = base64::encode(&bytes);
+        
+        result.push_str("```binary\n");
+        result.push_str(&base64);
+        result.push_str("\n```\n\n");
+    } else {
+        // 处理文本文件
+        let bytes = fs::read(path)?;
+        let content = String::from_utf8(bytes)
+            .with_context(|| format!("文件 {} 不是有效的 UTF-8 编码", rel_path))?;
+        
+        // 添加语言标识符
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()) {
+            if let Some(lang) = extension_map.get(&ext) {
+                result.push_str(&format!("```{}", lang));
+            } else {
+                result.push_str("```");
+            }
         } else {
             result.push_str("```");
         }
-    } else {
+        result.push_str("\n\n");
+        
+        // 处理内容
+        let processed_content = escape_markdown_content(&content, is_markdown);
+        result.push_str(&processed_content);
+        result.push_str("\n\n");
         result.push_str("```");
+        result.push_str("\n\n");
     }
-    result.push_str("\n\n");
-    
-    // 处理内容
-    let processed_content = escape_markdown_content(&content, is_markdown);
-    result.push_str(&processed_content);
-    result.push_str("\n\n");
-    result.push_str("```");
-    result.push_str("\n\n");
     
     Ok(result)
 }
@@ -336,15 +348,16 @@ fn revert_files(input_path: &str) -> Result<()> {
     let mut current_content = String::new();
     let mut is_header = true;
     let mut in_code_block = false;
-    let mut is_markdown = false;
+    let mut is_binary = false;
+
+    // 创建一个 Set 来记录已创建的目录
+    let mut created_dirs = std::collections::HashSet::new();
 
     for line in content.lines() {
         if line.starts_with("###  trxx:") {
             // 保存前一个文件
             if !current_file.is_empty() && !current_content.is_empty() {
-                // 去除开头和结尾的空行
-                let trimmed_content = current_content.trim_matches('\n');
-                save_file(&current_file, trimmed_content)?;
+                save_content(&current_file, &current_content, is_binary, &mut created_dirs)?;
             }
 
             // 提取新文件名
@@ -352,24 +365,24 @@ fn revert_files(input_path: &str) -> Result<()> {
                 .trim_start_matches("###  trxx:")
                 .trim()
                 .to_string();
-                
-            // 检查是否是 markdown 文件
-            is_markdown = current_file.ends_with(".md");
+            
             current_content = String::new();
             is_header = true;
             in_code_block = false;
+            is_binary = false;
         } else if !is_header {
-            // 跳过代码块标记
-            if line.starts_with("```") {
+            if line.starts_with("```binary") {
+                in_code_block = true;
+                is_binary = true;
+                current_content.clear();
+                continue;
+            } else if line.starts_with("```") {
                 in_code_block = !in_code_block;
                 continue;
             }
             
-            // 只有在代码块内的内容才添加到 current_content
             if in_code_block {
-                // 处理转义字符
-                let unescaped_line = unescape_markdown_content(line, is_markdown);
-                current_content.push_str(&unescaped_line);
+                current_content.push_str(line);
                 current_content.push('\n');
             }
         } else if line.is_empty() {
@@ -379,49 +392,83 @@ fn revert_files(input_path: &str) -> Result<()> {
 
     // 保存最后一个文件
     if !current_file.is_empty() && !current_content.is_empty() {
-        // 去除开头和结尾的空行
-        let trimmed_content = current_content.trim_matches('\n');
-        save_file(&current_file, trimmed_content)?;
+        save_content(&current_file, &current_content, is_binary, &mut created_dirs)?;
     }
 
     println!("文件已还原完成");
     Ok(())
 }
 
-fn save_file(file_path: &str, content: &str) -> Result<()> {
+fn save_content(file_path: &str, content: &str, is_binary: bool, created_dirs: &mut std::collections::HashSet<PathBuf>) -> Result<()> {
     let path = Path::new(file_path);
+    
+    // 确保父目录存在
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        let parent_path = parent.to_path_buf();
+        if !created_dirs.contains(&parent_path) {
+            fs::create_dir_all(&parent_path)
+                .with_context(|| format!("无法创建目录 {}", parent_path.display()))?;
+            created_dirs.insert(parent_path);
+        }
     }
-    fs::write(path, content)?;
+
+    // 根据文件类型保存内容
+    if is_binary {
+        let bytes = base64::decode(content.trim())
+            .with_context(|| format!("无法解码文件 {}", file_path))?;
+        fs::write(path, bytes)
+            .with_context(|| format!("无法写入文件 {}", file_path))?;
+    } else {
+        let trimmed_content = content.trim_matches('\n');
+        fs::write(path, trimmed_content)
+            .with_context(|| format!("无法写入文件 {}", file_path))?;
+    }
+
     Ok(())
 }
 
-fn is_text_file(path: &Path) -> bool {
-    // 如果文件大于 1MB，认为不是文本文件
+fn should_process_file(path: &Path) -> bool {
+    // 获取文件扩展名
+    let extension = path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    // 如果是图片文件，直接返回 true
+    if matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "svg") {
+        return true;
+    }
+
+    // 如果文件大于 1MB，且不是 SVG，则跳过
     if let Ok(metadata) = path.metadata() {
-        if metadata.len() > 1024 * 1024 {
+        if metadata.len() > 1024 * 1024 && extension != "svg" {
             return false;
         }
     }
 
-    let extension = path.extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("");
-
-    // 如果没有扩展名，尝试读取文件开头来判断是否为文本文件
+    // 如果没有扩展名，尝试检测是否为文本文件
     if extension.is_empty() {
         return is_probably_text(path);
     }
 
-    matches!(extension.to_lowercase().as_str(),
+    // 检查是否是支持的文本文件类型
+    matches!(extension.as_str(),
         "txt" | "md" | "rs" | "js" | "ts" | "json" | "yaml" | "yml" 
         | "toml" | "css" | "html" | "htm" | "xml" | "conf" | "cfg"
         | "ini" | "log" | "sh" | "bash" | "py" | "java" | "cpp" | "c"
         | "h" | "hpp" | "cs" | "go" | "rb" | "php" | "sql" | "vue"
         | "jsx" | "tsx" | "gitignore" | "env" | "rc" | "editorconfig"
         | "gradle" | "properties" | "bat" | "cmd" | "ps1" | "dockerfile"
-        | "lock" | "config" | "template" | "vim" | "lua")
+        | "lock" | "config" | "template" | "vim" | "lua" | "svg")
+}
+
+fn is_binary_file(path: &Path) -> bool {
+    let extension = path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    matches!(extension.as_str(), "png" | "jpg" | "jpeg")
 }
 
 fn is_probably_text(path: &Path) -> bool {
