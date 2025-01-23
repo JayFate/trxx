@@ -7,6 +7,40 @@ use std::collections::HashMap;
 use glob::glob;
 use serde_json;
 
+// 我来解释一下 #[command(subcommand)] 这个属性标注的含义：
+
+// 在 Rust 中，这是一个用于 clap crate（命令行参数解析库）的属性宏，它有以下作用：
+
+// 1. 它标注在一个字段上（在你的代码中是 command 字段），表示这个字段将用来处理子命令
+// 2. 它告诉 clap 这个字段的类型是一个子命令枚举（在你的代码中是 Commands 枚举）
+
+// 在你的代码中具体表现为：
+
+// ```rust
+// struct Cli {
+//     #[command(subcommand)]
+//     command: Option<Commands>,  // 这里的 Commands 是一个枚举类型
+//     // ... 其他字段
+// }
+
+// #[derive(Subcommand)]
+// enum Commands {
+//     Revert { input: String },  // 这是一个子命令
+// }
+// ```
+
+// 这样设计后，你的命令行工具就可以支持类似这样的使用方式：
+
+// ```bash
+// your_program revert input.txt   # 使用 revert 子命令
+// your_program                    # 不使用子命令的情况
+// ```
+
+// 实际效果：
+
+// - 当用户输入 your_program revert input.txt 时，command 字段会包含 Some(Commands::Revert { input: "input.txt" })
+// - 当用户直接输入 your_program 时，command 字段的值为 None
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -30,6 +64,85 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // ```
+    // Commands::Revert { input } 是什么语法？
+    // ```
+
+    // 这是 Rust 中的模式匹配（Pattern Matching）语法，具体是对枚举类型的解构（Destructuring）。让我来详细解释：
+
+    // 1. Commands::Revert { input } 是一个模式，用于匹配和解构枚举变体中的字段
+    // 2. 这种语法叫做结构体风格的枚举变体
+
+    // 在你的代码中，Commands 枚举是这样定义的：
+
+    // ```rust
+    // #[derive(Subcommand)]
+    // enum Commands {
+    //     Revert {
+    //         input: String,  // 这是一个命名字段
+    //     },
+    // }
+    // ```
+
+    // 当你使用 Commands::Revert { input } 进行模式匹配时：
+
+    // - input 会直接绑定到枚举变体中的 input 字段的值
+    // - 这种写法等同于 Commands::Revert { input: input }，因为字段名和变量名相同，可以简写
+
+    // 举个具体例子：
+
+    // ```rust
+    // match cli.command {
+    //     // 如果是 Revert 命令，解构出 input 字段的值
+    //     Some(Commands::Revert { input }) => revert_files(&input),
+    //     // input 变量现在包含了用户输入的字符串
+        
+    //     // 处理其他情况
+    //     None => { /* ... */ }
+    // }
+    // ```
+
+    // 这种语法的好处是：
+
+    // 可读性强，直观地表明我们要使用枚举变体中的哪些字段
+
+    // 可以直接获取到字段的值，无需额外的解构步骤
+
+    // 编译器会确保我们正确地处理了所有必要的字段
+
+
+
+    // 什么是 结构体风格的枚举变体 ？
+
+
+
+    // 在 Rust 中，枚举可以有三种风格的变体：
+
+    // 1. 单元变体（Unit Variant）：
+
+    // ```rust
+    // enum Message {
+    //     Quit,  // 没有任何数据的变体
+    // }
+    // ```
+
+    // 2. 元组变体（Tuple Variant）：
+
+    // ```rust
+    // enum Message {
+    //     Write(String),  // 包含匿名字段的变体
+    //     Point(i32, i32),  // 可以包含多个值
+    // }
+    // ```
+
+    // 3. 结构体变体（Struct Variant）：
+
+    // ```rust
+    // enum Message {
+    //     Move { x: i32, y: i32 },  // 带有命名字段的变体，像结构体一样
+    //     ChangeColor { r: u8, g: u8, b: u8 },  // 每个字段都有名字
+    // }
+    // ```
     match cli.command {
         Some(Commands::Revert { input }) => revert_files(&input),
         None => {
