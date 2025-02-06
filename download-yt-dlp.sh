@@ -1,9 +1,47 @@
 #!/bin/bash
 
-# curl -fsSL https://raw.githubusercontent.com/JayFate/trxx/main/download-yt-dlp.sh | bash
-
 # 创建目录
 mkdir -p ~/yt-dlp
+
+# 安装基本工具
+echo "安装基本工具..."
+sudo apt update && sudo apt install -y \
+    curl \
+    build-essential \
+    python3 \
+    python3-pip \
+    git
+
+# 安装 Rust 和 Cargo
+echo "安装 Rust 和 Cargo..."
+if ! command -v cargo &> /dev/null; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+else
+    echo "Rust 已安装，跳过..."
+fi
+
+# 安装 nvm
+echo "安装 nvm..."
+if [ ! -d "$HOME/.nvm" ]; then
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+else
+    echo "nvm 已安装，跳过..."
+fi
+
+# 安装 Node.js 22
+echo "安装 Node.js 22..."
+if ! command -v node &> /dev/null || [ "$(node -v | cut -d. -f1)" != "v22" ]; then
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm install 22
+    nvm use 22
+    nvm alias default 22
+else
+    echo "Node.js 22 已安装，跳过..."
+fi
 
 # 生成日期数组函数
 generate_dates() {
@@ -74,4 +112,13 @@ if ! cargo install trxx; then
     exit 1
 fi
 
+# 显示安装的版本信息
+echo "环境信息:"
+echo "Node.js 版本: $(node -v)"
+echo "npm 版本: $(npm -v)"
+echo "Python 版本: $(python3 --version)"
+echo "Rust 版本: $(rustc --version)"
+echo "Cargo 版本: $(cargo --version)"
+
 echo "所有操作完成!"
+
